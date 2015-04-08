@@ -29,13 +29,13 @@ grails.project.dependency.resolution = {
 	}
 
 	plugins {
-		compile ':spring-security-core:2.0-SNAPSHOT'
+		compile ':spring-security-core:2.0.1-SNAPSHOT'
 
-		compile ':hibernate:3.6.10.17', {
+		compile(":hibernate4:4.3.8.1") {
 			export = false
 		}
 
-		build ':release:3.0.1', ':rest-client-builder:2.0.3', {
+		build (":release:3.1.1", ":rest-client-builder:2.1.1") {
 			export = false
 		}
 	}
