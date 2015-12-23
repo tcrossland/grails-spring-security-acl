@@ -1,4 +1,4 @@
-/* Copyright 2009-2014 SpringSource.
+/* Copyright 2009-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,8 @@
  */
 package grails.plugin.springsecurity.acl
 
+import org.springframework.security.access.PermissionEvaluator
+import org.springframework.security.acls.domain.PermissionFactory
 import org.springframework.security.acls.model.Permission
 
 /**
@@ -26,16 +28,13 @@ class SecurityAclTagLib {
 	static namespace = 'sec'
 
 	/** Dependency injection for aclPermissionFactory. */
-	def aclPermissionFactory
+	PermissionFactory aclPermissionFactory
 
 	/** Dependency injection for permissionEvaluator. */
-	def permissionEvaluator
+	PermissionEvaluator permissionEvaluator
 
 	/** Dependency injection for springSecurityService. */
 	def springSecurityService
-
-	/** Dependency injection for webExpressionHandler. */
-	def webExpressionHandler
 
 	/**
 	 * Renders the body if the user has grants for the specified permissions. Permissions are

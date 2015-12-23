@@ -1,4 +1,4 @@
-/* Copyright 2009-2014 SpringSource.
+/* Copyright 2009-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,19 @@
  */
 package grails.plugin.springsecurity.acl
 
+import groovy.transform.EqualsAndHashCode
+import groovy.transform.ToString
+
 /**
  * @author <a href='mailto:burt@burtbeckwith.com'>Burt Beckwith</a>
  */
+@EqualsAndHashCode(includes='objectId', callSuper=true)
+@ToString(excludes='version', includeNames=true, includeSuper=true)
 class AclObjectIdentity extends AbstractAclObjectIdentity {
 
-	Long objectId
+	private static final long serialVersionUID = 1
 
-	@Override
-	String toString() {
-		"AclObjectIdentity id $id, aclClass $aclClass?.className, " +
-		"objectId $objectId, entriesInheriting $entriesInheriting"
-	}
+	Long objectId
 
 	static mapping = {
 		version false

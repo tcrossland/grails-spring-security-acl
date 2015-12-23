@@ -1,4 +1,4 @@
-/* Copyright 2009-2014 SpringSource.
+/* Copyright 2009-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,16 @@ package grails.plugin.springsecurity.acl
 
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import org.springframework.context.MessageSource
+import org.springframework.context.i18n.LocaleContextHolder
 import org.springframework.security.acls.domain.AccessControlEntryImpl
 import org.springframework.security.acls.domain.GrantedAuthoritySid
 import org.springframework.security.acls.domain.ObjectIdentityImpl
 import org.springframework.security.acls.domain.PrincipalSid
+import org.springframework.security.acls.jdbc.LookupStrategy
+import org.springframework.security.acls.model.AccessControlEntry
 import org.springframework.security.acls.model.Acl
+import org.springframework.security.acls.model.AclCache
 import org.springframework.security.acls.model.AlreadyExistsException
 import org.springframework.security.acls.model.AuditableAccessControlEntry
 import org.springframework.security.acls.model.ChildrenExistException
@@ -47,19 +52,14 @@ class AclService implements MutableAclService {
 	protected final Logger log = LoggerFactory.getLogger(getClass())
 
 	/** Dependency injection for aclLookupStrategy. */
-	def aclLookupStrategy
+	LookupStrategy aclLookupStrategy
 
 	/** Dependency injection for aclCache. */
-	def aclCache
+	AclCache aclCache
 
 	/** Dependency injection for messageSource. */
-	def messageSource
+	MessageSource messageSource
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.MutableAclService#createAcl(
-	 * 	org.springframework.security.acls.model.ObjectIdentity)
-	 */
 	@Transactional
 	MutableAcl createAcl(ObjectIdentity objectIdentity) throws AlreadyExistsException {
 		Assert.notNull objectIdentity, 'Object Identity required'
@@ -75,7 +75,7 @@ class AclService implements MutableAclService {
 		// Create the acl_object_identity row
 		createObjectIdentity objectIdentity, sid
 
-		return readAclById(objectIdentity)
+		readAclById objectIdentity
 	}
 
 	protected void createObjectIdentity(ObjectIdentity object, Sid owner) {
@@ -109,7 +109,7 @@ class AclService implements MutableAclService {
 		if (!aclSid && allowCreate) {
 			aclSid = save(new AclSid(sid: sidName, principal: principal))
 		}
-		return aclSid
+		aclSid
 	}
 
 	protected AclClass createOrRetrieveClass(String className, boolean allowCreate) {
@@ -117,14 +117,9 @@ class AclService implements MutableAclService {
 		if (!aclClass && allowCreate) {
 			aclClass = save(new AclClass(className: className))
 		}
-		return aclClass
+		aclClass
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.MutableAclService#deleteAcl(
-	 * 	org.springframework.security.acls.model.ObjectIdentity, boolean)
-	 */
 	@Transactional
 	void deleteAcl(ObjectIdentity objectIdentity, boolean deleteChildren) throws ChildrenExistException {
 
@@ -132,41 +127,64 @@ class AclService implements MutableAclService {
 		Assert.notNull objectIdentity.identifier, "Object Identity doesn't provide an identifier"
 
 		if (deleteChildren) {
-			for (child in findChildren(objectIdentity)) {
-				deleteAcl child, true
-			}
+			findChildren(objectIdentity).each { deleteAcl it, true }
 		}
 
 		AclObjectIdentity oid = retrieveObjectIdentity(objectIdentity)
+		if (oid) {
+			// Delete this ACL's ACEs in the acl_entry table
+			deleteEntries oid
 
-		// Delete this ACL's ACEs in the acl_entry table
-		deleteEntries oid
-
-		// Delete this ACL's acl_object_identity row
-		oid.delete()
+			// Delete this ACL's acl_object_identity row
+			oid.delete()
+		}
 
 		// Clear the cache
 		aclCache.evictFromCache objectIdentity
 	}
 
 	protected void deleteEntries(AclObjectIdentity oid) {
-		AclEntry.where { aclObjectIdentity == oid }.deleteAll()
+		if (oid) {
+			AclEntry.where { aclObjectIdentity == oid }.deleteAll()
+			AclEntry.withSession { it.flush() }
+		}
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.MutableAclService#updateAcl(
-	 * 	org.springframework.security.acls.model.MutableAcl)
-	 */
+	protected void deleteEntries(List<AclEntry> entries) {
+		log.debug 'Deleting entries: {}', entries
+		entries*.delete()
+		AclEntry.withSession { it.flush() }
+	}
+
 	@Transactional
 	MutableAcl updateAcl(MutableAcl acl) throws NotFoundException {
 		Assert.notNull acl.id, "Object Identity doesn't provide an identifier"
 
+		AclObjectIdentity aclObjectIdentity = retrieveObjectIdentity(acl.objectIdentity)
+
+		List<AclEntry> existingAces = AclEntry.findAllByAclObjectIdentity(aclObjectIdentity)
+
+		List<AclEntry> toDelete = existingAces.findAll { AclEntry ace ->
+			log.trace 'Checking ace for delete: {}', ace
+			!acl.entries.find { AccessControlEntry entry ->
+				log.trace 'Checking entry for delete: {}', entry
+				entry.permission.mask == ace.mask && entry.sid == ace.sid.sid
+			}
+		}
+
+		List<AccessControlEntry> toCreate = acl.entries.findAll { AccessControlEntry entry ->
+			log.trace 'Checking entry for create: {}', entry
+			!existingAces.find { AclEntry ace ->
+				log.trace 'Checking ace for create: {}', ace
+				entry.permission.mask == ace.mask && entry.sid == ace.sid.sid
+			}
+		}
+
 		// Delete this ACL's ACEs in the acl_entry table
-		deleteEntries retrieveObjectIdentity(acl.objectIdentity)
+		deleteEntries toDelete
 
 		// Create this ACL's ACEs in the acl_entry table
-		createEntries acl
+		createEntries acl, toCreate
 
 		// Change the mutable columns in acl_object_identity
 		updateObjectIdentity acl
@@ -174,15 +192,16 @@ class AclService implements MutableAclService {
 		// Clear the cache, including children
 		clearCacheIncludingChildren acl.objectIdentity
 
-		return readAclById(acl.objectIdentity)
+		readAclById acl.objectIdentity
 	}
 
-	protected void createEntries(MutableAcl acl) {
+	protected void createEntries(MutableAcl acl, List<AuditableAccessControlEntry> entries = null) {
+		entries = entries ?: acl.entries
 		int i = 0
-		for (AuditableAccessControlEntry entry in acl.entries) {
+		for (AuditableAccessControlEntry entry in entries) {
 			Assert.isInstanceOf AccessControlEntryImpl, entry, 'Unknown ACE class'
 			save new AclEntry(
-					aclObjectIdentity: AclObjectIdentity.get(acl.id),
+					aclObjectIdentity: AclObjectIdentity.load(acl.id),
 					aceOrder: i++,
 					sid: createOrRetrieveSid(entry.sid, true),
 					mask: entry.permission.mask,
@@ -199,9 +218,8 @@ class AclService implements MutableAclService {
 
 		AclObjectIdentity parent
 		if (acl.parentAcl) {
-			def oii = acl.parentAcl.objectIdentity
-			Assert.isInstanceOf ObjectIdentityImpl, oii,
-				'Implementation only supports ObjectIdentityImpl'
+			ObjectIdentity oii = acl.parentAcl.objectIdentity
+			Assert.isInstanceOf ObjectIdentityImpl, oii, 'Implementation only supports ObjectIdentityImpl'
 			parent = retrieveObjectIdentity(oii)
 		}
 
@@ -215,16 +233,11 @@ class AclService implements MutableAclService {
 		for (child in findChildren(objectIdentity)) {
 			clearCacheIncludingChildren child
 		}
-		aclCache.evictFromCache(objectIdentity)
+		aclCache.evictFromCache objectIdentity
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.AclService#findChildren(
-	 * 	org.springframework.security.acls.model.ObjectIdentity)
-	 */
 	List<ObjectIdentity> findChildren(ObjectIdentity parentOid) {
-		def children = AclObjectIdentity.withCriteria {
+		List<AclObjectIdentity> children = AclObjectIdentity.withCriteria {
 			parent {
 				eq 'objectId', parentOid.identifier
 				aclClass {
@@ -237,33 +250,18 @@ class AclService implements MutableAclService {
 			return null
 		}
 
-		def results = []
-		for (AclObjectIdentity aclObjectIdentity in children) {
-			results << new ObjectIdentityImpl(
-					lookupClass(aclObjectIdentity.aclClass.className), aclObjectIdentity.objectId)
-		}
-		results
+		children.collect { AclObjectIdentity aoi -> new ObjectIdentityImpl(lookupClass(aoi.aclClass.className), aoi.objectId) }
 	}
 
 	protected Class<?> lookupClass(String className) {
 		// workaround for Class.forName() not working in tests
-		return Class.forName(className, true, Thread.currentThread().contextClassLoader)
+		Class.forName className, true, Thread.currentThread().contextClassLoader
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.AclService#readAclById(
-	 * 	org.springframework.security.acls.model.ObjectIdentity)
-	 */
 	Acl readAclById(ObjectIdentity object) throws NotFoundException {
 		readAclById object, null
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.AclService#readAclById(
-	 * 	org.springframework.security.acls.model.ObjectIdentity, java.util.List)
-	 */
 	Acl readAclById(ObjectIdentity object, List<Sid> sids) throws NotFoundException {
 		Map<ObjectIdentity, Acl> map = readAclsById([object], sids)
 		Assert.isTrue map.containsKey(object),
@@ -271,26 +269,16 @@ class AclService implements MutableAclService {
 		map[object]
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.AclService#readAclsById(java.util.List)
-	 */
 	Map<ObjectIdentity, Acl> readAclsById(List<ObjectIdentity> objects) throws NotFoundException {
 		readAclsById objects, null
 	}
 
-	/**
-	 * {@inheritDoc}
-	 * @see org.springframework.security.acls.model.AclService#readAclsById(
-	 * 	java.util.List, java.util.List)
-	 */
 	Map<ObjectIdentity, Acl> readAclsById(List<ObjectIdentity> objects, List<Sid> sids) throws NotFoundException {
 		Map<ObjectIdentity, Acl> result = aclLookupStrategy.readAclsById(objects, sids)
 		// Check every requested object identity was found (throw NotFoundException if needed)
 		for (ObjectIdentity object in objects) {
 			if (!result.containsKey(object)) {
-				throw new NotFoundException(
-						"Unable to find ACL information for object identity '$object'")
+				throw new NotFoundException("Unable to find ACL information for object identity '$object'")
 			}
 		}
 		return result
@@ -307,23 +295,17 @@ class AclService implements MutableAclService {
 	}
 
 	protected save(bean) {
-		bean.validate()
-		if (bean.hasErrors()) {
-			if (log.isWarnEnabled()) {
-				def message = new StringBuilder(
-						"problem creating ${bean.getClass().simpleName}: $bean")
-				def locale = Locale.getDefault()
+		if (!bean.save()) {
+			if (log.warnEnabled) {
+				def message = new StringBuilder("problem creating ${bean.getClass().simpleName}: $bean")
+				def locale = LocaleContextHolder.getLocale()
 				for (fieldErrors in bean.errors) {
 					for (error in fieldErrors.allErrors) {
-						message.append('\n\t')
-						message.append(messageSource.getMessage(error, locale))
+						message << '\n\t' << messageSource.getMessage(error, locale)
 					}
 				}
-				log.warn message
+				log.warn message.toString()
 			}
-		}
-		else {
-			bean.save()
 		}
 
 		bean

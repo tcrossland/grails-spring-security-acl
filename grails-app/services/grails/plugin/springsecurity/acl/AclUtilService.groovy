@@ -1,4 +1,4 @@
-/* Copyright 2009-2014 SpringSource.
+/* Copyright 2009-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,17 @@
  */
 package grails.plugin.springsecurity.acl
 
+import grails.plugin.springsecurity.acl.model.ObjectIdentityRetrievalStrategyAndGenerator
+import org.springframework.security.access.PermissionEvaluator
 import org.springframework.security.acls.domain.GrantedAuthoritySid
 import org.springframework.security.acls.domain.PrincipalSid
 import org.springframework.security.acls.model.Acl
+import org.springframework.security.acls.model.MutableAcl
 import org.springframework.security.acls.model.NotFoundException
 import org.springframework.security.acls.model.ObjectIdentity
 import org.springframework.security.acls.model.Permission
 import org.springframework.security.acls.model.Sid
+import org.springframework.security.acls.model.SidRetrievalStrategy
 import org.springframework.security.core.Authentication
 
 /**
@@ -34,13 +38,13 @@ class AclUtilService {
 	def aclService
 
 	/** Dependency injection for permissionEvaluator. */
-	def permissionEvaluator
+	PermissionEvaluator permissionEvaluator
 
 	/** Dependency injection for sidRetrievalStrategy. */
-	def sidRetrievalStrategy
+	SidRetrievalStrategy sidRetrievalStrategy
 
 	/** Dependency injection for objectIdentityRetrievalStrategy. */
-	def objectIdentityRetrievalStrategy
+	ObjectIdentityRetrievalStrategyAndGenerator objectIdentityRetrievalStrategy
 
 	/**
 	 * Grant a permission. Used when you don't have the instance available.
@@ -50,7 +54,7 @@ class AclUtilService {
 	 * @param recipient  the grantee; can be a username, role name, Sid, or Authentication
 	 * @param permission  the permission to grant
 	 */
-	void addPermission(Class<?> domainClass, long id, recipient, Permission permission) {
+	void addPermission(Class<?> domainClass, Serializable id, recipient, Permission permission) {
 		ObjectIdentity oid = objectIdentityRetrievalStrategy.createObjectIdentity(id, domainClass.name)
 		addPermission oid, recipient, permission
 	}
@@ -78,7 +82,7 @@ class AclUtilService {
 
 		Sid sid = createSid(recipient)
 
-		def acl
+		MutableAcl acl
 		try {
 			acl = aclService.readAclById(oid)
 		}
@@ -99,7 +103,7 @@ class AclUtilService {
 	 * @param newOwnerUsername  the new username
 	 */
 	void changeOwner(domainObject, String newUsername) {
-		def acl = readAcl(domainObject)
+		MutableAcl acl = readAcl(domainObject)
 		acl.owner = new PrincipalSid(newUsername)
 		aclService.updateAcl acl
 	}
@@ -125,7 +129,7 @@ class AclUtilService {
 	 */
 	void deletePermission(Class<?> domainClass, long id, recipient, Permission permission) {
 		Sid sid = createSid(recipient)
-		def acl = readAcl(domainClass, id)
+		MutableAcl acl = readAcl(domainClass, id)
 
 		acl.entries.eachWithIndex { entry, i ->
 			if (entry.sid.equals(sid) && entry.permission.equals(permission)) {

@@ -1,4 +1,4 @@
-/* Copyright 2009-2014 SpringSource.
+/* Copyright 2009-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,18 @@
  */
 package grails.plugin.springsecurity.acl
 
+import groovy.transform.EqualsAndHashCode
+import groovy.transform.ToString
+
 /**
  * @author <a href='mailto:burt@burtbeckwith.com'>Burt Beckwith</a>
  */
-class AclEntry {
+@EqualsAndHashCode(includes=['aclObjectIdentity', 'aceOrder', 'sid', 'mask',
+                             'granting', 'auditSuccess', 'auditFailure'])
+@ToString(excludes='version', includeNames=true)
+class AclEntry implements Serializable {
+
+	private static final long serialVersionUID = 1
 
 	AclObjectIdentity aclObjectIdentity
 	int aceOrder
@@ -26,12 +34,6 @@ class AclEntry {
 	boolean granting
 	boolean auditSuccess
 	boolean auditFailure
-
-	@Override
-	String toString() {
-		"AclEntry id $id, aceOrder $aceOrder, mask $mask, granting $granting, " +
-		"aclObjectIdentity $aclObjectIdentity"
-	}
 
 	static mapping = {
 		version false
